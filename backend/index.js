@@ -1,114 +1,128 @@
 import "dotenv/config"
 import cors from "cors"
 import express from "express"
-import session from "express-session";
-import {readFile,writeFile} from "fs/promises"
-import bcrypt from "bcrypt";
-const app=express()
-app.use(express.json)
-app.use(express.urlencoded({extended:true}))
+import session from "express-session"
+import bcrypt from "bcrypt"
+
+const app = express()
+
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+
 app.use(cors({
-    origin:"http://localhost:63342/",
+    origin: "http://localhost:63342",
     credentials: true
 }))
 
-
-app.use(
-    session({
-        secret: "super-secret-key",
-        resave: false,
-        saveUninitialized: true,
-        cookie: {
-            secure: false,
-            maxAge: 1000 * 60 * 60
-        }
-    })
-);
-
-let users=[
-    {id:1,login:"mery@gmil.com",password:"1234"}
-]
-
-app.get("/login", (req, res) => {
-    const { login, password,email,isAdmin } = req.query;
-    const usersValues = users.find(user => user.login.toLowerCase() === login.toLowerCase() && user.password === password)
-    if (usersValues) {
-        let newUser={...usersValues}
-        delete newUser.password
-        req.session.user = newUser
-        return res.json(newUser);
+app.use(session({
+    secret: "super-secret-key",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: false,
+        maxAge: 1000 * 60 * 60
     }
-    return res.json({
-        error: "invalid login or password"
-    });
-});
-app.post("/register", async (req,res)=>{
-    const{name,email,password,isAdminEl}=req.body
+}))
 
-    if(!name||!email||!password){
-      return  res.status(400).json({massage:"invalid email or password or name"})
+let users = []
+
+app.post("/register", async (req, res) => {
+    const { name, email, password, isAdmin } = req.body
+
+    if (!name || !email || !password) {
+        return res.status(400).json({ error: "Fill all fields" })
     }
 
-    const hashedPassword= await bcrypt.hash(password,10)
-
-    let val={id:Date.now(),name,email,password:hashedPassword,role:isAdminEl?"admin":"user"}
-
-    let data=await readFile("user.json","utf-8")
-    data=JSON.parse(data)
-    data.push(val)
-    await writeFile("users-json",JSON.stringify(data,null,2),"utf-8")
-
-
-    delete val.password
-    req.session.user={
-        newValue:val
+    const exists = users.find(u => u.email === email)
+    if (exists) {
+        return res.status(400).json({ error: "Email exists" })
     }
-    res.json(val)
 
+    const hashed = await bcrypt.hash(password, 10)
+
+    const newUser = {
+        id: Date.now(),
+        name,
+        email,
+        password: hashed,
+        role: isAdmin ? "admin" : "user"
+    }
+
+    users.push(newUser)
+
+    req.session.user = {
+        id: newUser.id,
+        name: newUser.name,
+        role: newUser.role
+    }
+
+    res.json(req.session.user)
 })
 
 
-app.get("/profile", (req, res)=>{
+app.post("/login", async (req, res) => {
+    const { email, password } = req.body
 
-    if(req.session.user){
-        return res.json(req.session.user)
+    const user = users.find(u => u.email === email)
+    if (!user) return res.json({ error: "User not found" })
+
+    const match = await bcrypt.compare(password, user.password)
+    if (!match) return res.json({ error: "Wrong password" })
+
+    req.session.user = {
+        id: user.id,
+        name: user.name,
+        role: user.role
     }
-    res.json({message:"not logged in"})
 
+    res.json(req.session.user)
 })
 
-app.get("/logout", (req, res)=>{
 
-    if(req.session.user){
-        req.session.user=null
-        return res.json("logout user")
+app.get("/profile", (req, res) => {
+    if (!req.session.user)
+        return res.json({ error: "Not logged" })
+
+    res.json(req.session.user)
+})
+
+
+app.get("/admin", (req, res) => {
+    if (!req.session.user || req.session.user.role !== "admin") {
+        return res.status(403).json({ error: "Access denied" })
     }
-    res.json({message:"not logged in"})
 
+    const safeUsers = users.map(u => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role
+    }))
+
+    res.json(safeUsers)
 })
 
-
-app.get("/admin", (req, res)=>{
-
-    if(req.session.user.newValue.role==="admin"){
-
-        return res.json(users)
+app.put("/admin/role/:id", (req, res) => {
+    if (!req.session.user || req.session.user.role !== "admin") {
+        return res.status(403).json({ error: "Access denied" })
     }
-    res.json({message:"not logged in"})
 
+    const user = users.find(u => u.id === req.params.id)
+    if (!user) return res.json({ error: "User not found" })
+
+    user.role = user.role === "admin" ? "user" : "admin"
+
+    res.json({ success: true })
 })
 
 
-app.get("/check/:psw", async (req, res)=>{
-    const {psw}=req.params
+app.delete("/admin/:id", (req, res) => {
+    if (!req.session.user || req.session.user.role !== "admin") {
+        return res.status(403).json({ error: "Access denied" })
+    }
 
-    const isMatch=await bcrypt.compare(psw,)
-        if(isMatch){
-            return res.json("josht email or password")
-        }
-        res.json({message:"not logged in"})
+    users = users.filter(u => u.id !== req.params.id)
+    res.json({ success: true })
 })
-
-
 
 app.listen(process.env.APP_PORT,()=> console.log("Server is running"))
